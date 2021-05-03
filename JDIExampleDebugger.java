@@ -1,7 +1,7 @@
-//import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.Vector;
 import java.util.StringTokenizer;
 import java.lang.String;
@@ -17,6 +17,7 @@ import com.sun.jdi.LocalVariable;
 import com.sun.jdi.Value;
 import com.sun.jdi.Location;
 import com.sun.jdi.Field;
+import com.sun.jdi.ThreadReference;
 
 import com.sun.jdi.connect.Connector;
 import com.sun.jdi.connect.LaunchingConnector;
@@ -24,22 +25,23 @@ import com.sun.jdi.connect.LaunchingConnector;
 import com.sun.jdi.request.*;
 
 import com.sun.jdi.event.*;
-// import com.sun.jdi.event.ClassPrepareEvent;
-// import com.sun.jdi.event.LocatableEvent;
-// import com.sun.jdi.event.EventSet;
-// import com.sun.jdi.event.Event;
-// import com.sun.jdi.event.StepEvent;
-// import com.sun.jdi.event.BreakpointEvent;
-// import com.sun.jdi.event.ThreadStartEvent;
-// import com.sun.jdi.event.ThreadDeathEvent;
-//import com.sun.jdi.event.EventRequestManager;
-
 
 public class JDIExampleDebugger {
     private Class debugClass;
     private Vector<Integer> newBreakPointLines = new Vector<Integer>();
+    private static String[] threadStep = new String[3];
+    private static int deathCount = 0;
 
     public static void main(String[] args) throws Exception {
+        System.out.println("Please input thread step:");
+        Scanner input = new Scanner(System.in);
+        String tmp = input.nextLine();
+        for (int i = 0; i < 3; i++) {
+            threadStep[i] = "Thread-"+tmp.substring(i , (i + 1));
+            // System.out.print(threadStep[i] + "\t");
+        }
+        System.out.println();
+
         JDIExampleDebugger debuggerInstance = new JDIExampleDebugger();
         debuggerInstance.setDebugClass(JDIExampleDebuggee.class);
         VirtualMachine vm = null;
@@ -51,10 +53,10 @@ public class JDIExampleDebugger {
             while ((eventSet = vm.eventQueue().remove()) != null) {
                 for (Event event : eventSet) {
                     if (event instanceof ClassPrepareEvent) {
-                        debuggerInstance.setBreakPoints(vm, (ClassPrepareEvent)event);
+                        debuggerInstance.setBreakPoints(vm, (ClassPrepareEvent) event);
                     }
                     if (event instanceof BreakpointEvent) {
-                        debuggerInstance.enableStepRequest(vm, (BreakpointEvent)event);
+                        debuggerInstance.enableStepRequest(vm, (BreakpointEvent) event);
                     }
                     if (event instanceof ThreadStartEvent) {
                         debuggerInstance.threadStart(vm, (ThreadStartEvent) event);
@@ -84,11 +86,35 @@ public class JDIExampleDebugger {
     }
 
     public void threadStart(VirtualMachine vm, ThreadStartEvent event) {
-        System.out.println("Thread " + event.thread().name() + " Start\n");
+        if (event.thread().name().equals(threadStep[deathCount])) {
+            event.thread().resume();
+            System.out.println(event.thread().name() + " Start\n");
+        } else {
+            for (int i = deathCount + 1; i < threadStep.length; i++) {
+                if (event.thread().name().equals(threadStep[i])) {
+                    event.thread().suspend();
+                    System.out.println("Suspend " + event.thread().name()+"\n");
+                }
+            }
+        }
+
     }
 
     public void threadDeath(VirtualMachine vm, ThreadDeathEvent event) {
-        System.out.println("Thread " + event.thread().name() + " Finish\n");
+        System.out.println( event.thread().name() + " Finish\n");
+        if (deathCount < threadStep.length-1 && event.thread().name().equals(threadStep[deathCount])) {
+            deathCount++;
+            if (deathCount < threadStep.length) {
+                for (ThreadReference tr : vm.allThreads()) {
+                    if (tr.name().equals(threadStep[deathCount])) {
+                        tr.resume();
+                        System.out.println("resume " + tr.name()+"\n");
+                        break;
+                    }
+                }
+            } 
+        }
+
     }
 
     private void setDebugClass(Class<JDIExampleDebuggee> debugClass) {
@@ -109,26 +135,26 @@ public class JDIExampleDebugger {
         classPrepareRequest.addClassFilter(debugClass.getName());
         classPrepareRequest.enable();
     }
-    
+
     public void enableStepRequest(VirtualMachine vm, BreakpointEvent event) {
-        if (event.location().toString().
-            contains(debugClass.getName() + ":" + newBreakPointLines.get(newBreakPointLines.size()-1) )) {
-            StepRequest stepRequest = vm.eventRequestManager().createStepRequest(event.thread(), StepRequest.STEP_LINE, StepRequest.STEP_OVER);
-            stepRequest.enable();    
+        if (event.location().toString()
+                .contains(debugClass.getName() + ":" + newBreakPointLines.get(newBreakPointLines.size() - 1))) {
+            StepRequest stepRequest = vm.eventRequestManager().createStepRequest(event.thread(), StepRequest.STEP_LINE,
+                    StepRequest.STEP_OVER);
+            stepRequest.enable();
         }
     }
 
     public void setBreakPoints(VirtualMachine vm, ClassPrepareEvent event) throws AbsentInformationException {
         ClassType classType = (ClassType) event.referenceType();
-        for( Location location : classType.allLineLocations())
-        {
-            if(classType.locationsOfLine(location.lineNumber()).get(0).method().toString().contains("main(java.lang.String[])") )
-            {
+        for (Location location : classType.allLineLocations()) {
+            if (classType.locationsOfLine(location.lineNumber()).get(0).method().toString()
+                    .contains("main(java.lang.String[])")) {
                 newBreakPointLines.add(location.lineNumber());
                 break;
             }
         }
-        for(int lineNumber: newBreakPointLines) {
+        for (int lineNumber : newBreakPointLines) {
             Location location = classType.locationsOfLine(lineNumber).get(0);
             BreakpointRequest bpReq = vm.eventRequestManager().createBreakpointRequest(location);
             bpReq.enable();
@@ -136,30 +162,18 @@ public class JDIExampleDebugger {
     }
 
     // print all the visible variables with the respective values
-    public void displayVariables(LocatableEvent event) throws IncompatibleThreadStateException, AbsentInformationException {
+    public void displayVariables(LocatableEvent event)
+            throws IncompatibleThreadStateException, AbsentInformationException {
         List<StackFrame> frames = event.thread().frames();
         for (StackFrame stackFrame : frames) {
-            if(stackFrame.location().toString().contains(debugClass.getName())) {
+            if (stackFrame.location().toString().contains(debugClass.getName())) {
                 Map<LocalVariable, Value> visibleVariables = stackFrame.getValues(stackFrame.visibleVariables());
-                System.out.println("Variables at " + stackFrame.location().toString() +  " > ");
+                //System.out.println("Variables at " + stackFrame.location().toString() + " > ");
                 for (Map.Entry<LocalVariable, Value> entry : visibleVariables.entrySet()) {
-                    System.out.println(entry.getKey().name() + " = " + entry.getValue());
+                    //System.out.println(entry.getKey().name() + " = " + entry.getValue());
                 }
-                System.out.println();
+                //System.out.println();
             }
-            // else {
-            //     List<LocalVariable> lvs = stackFrame.visibleVariables();
-            //     System.out.println("Variables at " + stackFrame.location().toString() +  " > ");
-            //     for (LocalVariable lv : lvs) {
-            //         System.out.println(lv.name() + " = "  + stackFrame.getValue(lv));
-            //     }
-            //     // Map<LocalVariable, Value> visibleVariables = stackFrame.getValues(stackFrame.visibleVariables());
-            //     // System.out.println("Variables at " + stackFrame.location().toString() +  " > ");
-            //     // for (Map.Entry<LocalVariable, Value> entry : visibleVariables.entrySet()) {
-            //     //     System.out.println(entry.getKey().name() + " = " + entry.getValue());
-            //     // }
-            //     System.out.println();
-            // }
         }
     }
 }
